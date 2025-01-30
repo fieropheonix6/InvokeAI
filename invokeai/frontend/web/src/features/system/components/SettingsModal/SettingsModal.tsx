@@ -1,6 +1,9 @@
 import {
+  Button,
   Flex,
-  Heading,
+  FormControl,
+  FormControlGroup,
+  FormLabel,
   Modal,
   ModalBody,
   ModalCloseButton,
@@ -8,85 +11,62 @@ import {
   ModalFooter,
   ModalHeader,
   ModalOverlay,
+  Switch,
   Text,
-  useDisclosure,
-} from '@chakra-ui/react';
-import { createSelector } from '@reduxjs/toolkit';
-import { VALID_LOG_LEVELS } from 'app/logging/useLogger';
-import { LOCALSTORAGE_KEYS, LOCALSTORAGE_PREFIX } from 'app/store/constants';
+} from '@invoke-ai/ui-library';
 import { useAppDispatch, useAppSelector } from 'app/store/storeHooks';
-import IAIButton from 'common/components/IAIButton';
-import IAIMantineSelect from 'common/components/IAIMantineSelect';
-import IAISwitch from 'common/components/IAISwitch';
-import { systemSelector } from 'features/system/store/systemSelectors';
+import { InformationalPopover } from 'common/components/InformationalPopover/InformationalPopover';
+import ScrollableContent from 'common/components/OverlayScrollbars/ScrollableContent';
+import { buildUseBoolean } from 'common/hooks/useBoolean';
+import { useClearStorage } from 'common/hooks/useClearStorage';
+import { selectShouldUseCPUNoise, shouldUseCpuNoiseChanged } from 'features/controlLayers/store/paramsSlice';
+import { useRefreshAfterResetModal } from 'features/system/components/SettingsModal/RefreshAfterResetModal';
+import { SettingsDeveloperLogIsEnabled } from 'features/system/components/SettingsModal/SettingsDeveloperLogIsEnabled';
+import { SettingsDeveloperLogLevel } from 'features/system/components/SettingsModal/SettingsDeveloperLogLevel';
+import { SettingsDeveloperLogNamespaces } from 'features/system/components/SettingsModal/SettingsDeveloperLogNamespaces';
+import { useClearIntermediates } from 'features/system/components/SettingsModal/useClearIntermediates';
+import { StickyScrollable } from 'features/system/components/StickyScrollable';
 import {
-  SystemState,
-  consoleLogLevelChanged,
-  setEnableImageDebugging,
+  selectSystemShouldAntialiasProgressImage,
+  selectSystemShouldConfirmOnDelete,
+  selectSystemShouldConfirmOnNewSession,
+  selectSystemShouldEnableInformationalPopovers,
+  selectSystemShouldEnableModelDescriptions,
+  selectSystemShouldShowInvocationProgressDetail,
+  selectSystemShouldUseNSFWChecker,
+  selectSystemShouldUseWatermarker,
   setShouldConfirmOnDelete,
-  setShouldDisplayGuides,
+  setShouldEnableInformationalPopovers,
+  setShouldEnableModelDescriptions,
+  setShouldShowInvocationProgressDetail,
   shouldAntialiasProgressImageChanged,
-  shouldLogToConsoleChanged,
+  shouldConfirmOnNewSessionToggled,
+  shouldUseNSFWCheckerChanged,
+  shouldUseWatermarkerChanged,
 } from 'features/system/store/systemSlice';
-import { uiSelector } from 'features/ui/store/uiSelectors';
-import {
-  setShouldShowProgressInViewer,
-  setShouldUseCanvasBetaLayout,
-  setShouldUseSliders,
-} from 'features/ui/store/uiSlice';
-import { UIState } from 'features/ui/store/uiTypes';
-import { isEqual } from 'lodash-es';
-import {
-  ChangeEvent,
-  PropsWithChildren,
-  ReactElement,
-  cloneElement,
-  useCallback,
-  useEffect,
-} from 'react';
+import { selectShouldShowProgressInViewer } from 'features/ui/store/uiSelectors';
+import { setShouldShowProgressInViewer } from 'features/ui/store/uiSlice';
+import type { ChangeEvent, ReactElement } from 'react';
+import { cloneElement, memo, useCallback, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
-import { LogLevelName } from 'roarr';
-import SettingsSchedulers from './SettingsSchedulers';
+import { useGetAppConfigQuery } from 'services/api/endpoints/appInfo';
 
-const selector = createSelector(
-  [systemSelector, uiSelector],
-  (system: SystemState, ui: UIState) => {
-    const {
-      shouldConfirmOnDelete,
-      shouldDisplayGuides,
-      enableImageDebugging,
-      consoleLogLevel,
-      shouldLogToConsole,
-      shouldAntialiasProgressImage,
-    } = system;
-
-    const {
-      shouldUseCanvasBetaLayout,
-      shouldUseSliders,
-      shouldShowProgressInViewer,
-    } = ui;
-
-    return {
-      shouldConfirmOnDelete,
-      shouldDisplayGuides,
-      enableImageDebugging,
-      shouldUseCanvasBetaLayout,
-      shouldUseSliders,
-      shouldShowProgressInViewer,
-      consoleLogLevel,
-      shouldLogToConsole,
-      shouldAntialiasProgressImage,
-    };
-  },
-  {
-    memoizeOptions: { resultEqualityCheck: isEqual },
-  }
-);
+import { SettingsLanguageSelect } from './SettingsLanguageSelect';
 
 type ConfigOptions = {
-  shouldShowDeveloperSettings: boolean;
-  shouldShowResetWebUiText: boolean;
-  shouldShowBetaLayout: boolean;
+  shouldShowDeveloperSettings?: boolean;
+  shouldShowResetWebUiText?: boolean;
+  shouldShowClearIntermediates?: boolean;
+  shouldShowLocalizationToggle?: boolean;
+  shouldShowInvocationProgressDetailSetting?: boolean;
+};
+
+const defaultConfig: ConfigOptions = {
+  shouldShowDeveloperSettings: true,
+  shouldShowResetWebUiText: true,
+  shouldShowClearIntermediates: true,
+  shouldShowLocalizationToggle: true,
+  shouldShowInvocationProgressDetailSetting: true,
 };
 
 type SettingsModalProps = {
@@ -95,69 +75,109 @@ type SettingsModalProps = {
   config?: ConfigOptions;
 };
 
-const SettingsModal = ({ children, config }: SettingsModalProps) => {
+const [useSettingsModal] = buildUseBoolean(false);
+
+const SettingsModal = ({ config = defaultConfig, children }: SettingsModalProps) => {
   const dispatch = useAppDispatch();
   const { t } = useTranslation();
 
-  const shouldShowBetaLayout = config?.shouldShowBetaLayout ?? true;
-  const shouldShowDeveloperSettings =
-    config?.shouldShowDeveloperSettings ?? true;
-  const shouldShowResetWebUiText = config?.shouldShowResetWebUiText ?? true;
+  const { isNSFWCheckerAvailable, isWatermarkerAvailable } = useGetAppConfigQuery(undefined, {
+    selectFromResult: ({ data }) => ({
+      isNSFWCheckerAvailable: data?.nsfw_methods.includes('nsfw_checker') ?? false,
+      isWatermarkerAvailable: data?.watermarking_methods.includes('invisible_watermark') ?? false,
+    }),
+  });
+
+  const {
+    clearIntermediates,
+    hasPendingItems,
+    intermediatesCount,
+    isLoading: isLoadingClearIntermediates,
+    refetchIntermediatesCount,
+  } = useClearIntermediates(Boolean(config?.shouldShowClearIntermediates));
+  const settingsModal = useSettingsModal();
+  const refreshModal = useRefreshAfterResetModal();
+
+  const shouldUseCpuNoise = useAppSelector(selectShouldUseCPUNoise);
+  const shouldConfirmOnDelete = useAppSelector(selectSystemShouldConfirmOnDelete);
+  const shouldShowProgressInViewer = useAppSelector(selectShouldShowProgressInViewer);
+  const shouldAntialiasProgressImage = useAppSelector(selectSystemShouldAntialiasProgressImage);
+  const shouldUseNSFWChecker = useAppSelector(selectSystemShouldUseNSFWChecker);
+  const shouldUseWatermarker = useAppSelector(selectSystemShouldUseWatermarker);
+  const shouldEnableInformationalPopovers = useAppSelector(selectSystemShouldEnableInformationalPopovers);
+  const shouldEnableModelDescriptions = useAppSelector(selectSystemShouldEnableModelDescriptions);
+  const shouldConfirmOnNewSession = useAppSelector(selectSystemShouldConfirmOnNewSession);
+  const shouldShowInvocationProgressDetail = useAppSelector(selectSystemShouldShowInvocationProgressDetail);
+  const onToggleConfirmOnNewSession = useCallback(() => {
+    dispatch(shouldConfirmOnNewSessionToggled());
+  }, [dispatch]);
+
+  const clearStorage = useClearStorage();
 
   useEffect(() => {
-    if (!shouldShowDeveloperSettings) {
-      dispatch(shouldLogToConsoleChanged(false));
+    if (settingsModal.isTrue && Boolean(config?.shouldShowClearIntermediates)) {
+      refetchIntermediatesCount();
     }
-  }, [shouldShowDeveloperSettings, dispatch]);
-
-  const {
-    isOpen: isSettingsModalOpen,
-    onOpen: onSettingsModalOpen,
-    onClose: onSettingsModalClose,
-  } = useDisclosure();
-
-  const {
-    isOpen: isRefreshModalOpen,
-    onOpen: onRefreshModalOpen,
-    onClose: onRefreshModalClose,
-  } = useDisclosure();
-
-  const {
-    shouldConfirmOnDelete,
-    shouldDisplayGuides,
-    enableImageDebugging,
-    shouldUseCanvasBetaLayout,
-    shouldUseSliders,
-    shouldShowProgressInViewer,
-    consoleLogLevel,
-    shouldLogToConsole,
-    shouldAntialiasProgressImage,
-  } = useAppSelector(selector);
+  }, [config?.shouldShowClearIntermediates, refetchIntermediatesCount, settingsModal.isTrue]);
 
   const handleClickResetWebUI = useCallback(() => {
-    // Only remove our keys
-    Object.keys(window.localStorage).forEach((key) => {
-      if (
-        LOCALSTORAGE_KEYS.includes(key) ||
-        key.startsWith(LOCALSTORAGE_PREFIX)
-      ) {
-        localStorage.removeItem(key);
-      }
-    });
-    onSettingsModalClose();
-    onRefreshModalOpen();
-  }, [onSettingsModalClose, onRefreshModalOpen]);
+    clearStorage();
+    settingsModal.setFalse();
+    refreshModal.setTrue();
+  }, [clearStorage, settingsModal, refreshModal]);
 
-  const handleLogLevelChanged = useCallback(
-    (v: string) => {
-      dispatch(consoleLogLevelChanged(v as LogLevelName));
+  const handleChangeShouldConfirmOnDelete = useCallback(
+    (e: ChangeEvent<HTMLInputElement>) => {
+      dispatch(setShouldConfirmOnDelete(e.target.checked));
+    },
+    [dispatch]
+  );
+  const handleChangeShouldUseNSFWChecker = useCallback(
+    (e: ChangeEvent<HTMLInputElement>) => {
+      dispatch(shouldUseNSFWCheckerChanged(e.target.checked));
+    },
+    [dispatch]
+  );
+  const handleChangeShouldUseWatermarker = useCallback(
+    (e: ChangeEvent<HTMLInputElement>) => {
+      dispatch(shouldUseWatermarkerChanged(e.target.checked));
+    },
+    [dispatch]
+  );
+  const handleChangeShouldShowProgressInViewer = useCallback(
+    (e: ChangeEvent<HTMLInputElement>) => {
+      dispatch(setShouldShowProgressInViewer(e.target.checked));
+    },
+    [dispatch]
+  );
+  const handleChangeShouldAntialiasProgressImage = useCallback(
+    (e: ChangeEvent<HTMLInputElement>) => {
+      dispatch(shouldAntialiasProgressImageChanged(e.target.checked));
+    },
+    [dispatch]
+  );
+  const handleChangeShouldEnableInformationalPopovers = useCallback(
+    (e: ChangeEvent<HTMLInputElement>) => {
+      dispatch(setShouldEnableInformationalPopovers(e.target.checked));
+    },
+    [dispatch]
+  );
+  const handleChangeShouldEnableModelDescriptions = useCallback(
+    (e: ChangeEvent<HTMLInputElement>) => {
+      dispatch(setShouldEnableModelDescriptions(e.target.checked));
+    },
+    [dispatch]
+  );
+  const handleChangeShouldUseCpuNoise = useCallback(
+    (e: ChangeEvent<HTMLInputElement>) => {
+      dispatch(shouldUseCpuNoiseChanged(e.target.checked));
     },
     [dispatch]
   );
 
-  const handleLogToConsoleChanged = useCallback(
+  const handleChangeShouldShowInvocationProgressDetail = useCallback(
     (e: ChangeEvent<HTMLInputElement>) => {
-      dispatch(shouldLogToConsoleChanged(e.target.checked));
+      dispatch(setShouldShowInvocationProgressDetail(e.target.checked));
     },
     [dispatch]
   );
@@ -165,144 +185,129 @@ const SettingsModal = ({ children, config }: SettingsModalProps) => {
   return (
     <>
       {cloneElement(children, {
-        onClick: onSettingsModalOpen,
+        onClick: settingsModal.setTrue,
       })}
-
-      <Modal
-        isOpen={isSettingsModalOpen}
-        onClose={onSettingsModalClose}
-        size="xl"
-        isCentered
-      >
+      <Modal isOpen={settingsModal.isTrue} onClose={settingsModal.setFalse} size="2xl" isCentered useInert={false}>
         <ModalOverlay />
-        <ModalContent>
-          <ModalHeader>{t('common.settingsLabel')}</ModalHeader>
+        <ModalContent maxH="80vh" h="68rem">
+          <ModalHeader bg="none">{t('common.settingsLabel')}</ModalHeader>
           <ModalCloseButton />
-          <ModalBody>
-            <Flex sx={{ gap: 4, flexDirection: 'column' }}>
-              <StyledFlex>
-                <Heading size="sm">{t('settings.general')}</Heading>
-                <IAISwitch
-                  label={t('settings.confirmOnDelete')}
-                  isChecked={shouldConfirmOnDelete}
-                  onChange={(e: ChangeEvent<HTMLInputElement>) =>
-                    dispatch(setShouldConfirmOnDelete(e.target.checked))
-                  }
-                />
-              </StyledFlex>
+          <ModalBody display="flex" flexDir="column" gap={4}>
+            <ScrollableContent>
+              <Flex flexDir="column" gap={4}>
+                <FormControlGroup formLabelProps={{ flexGrow: 1 }}>
+                  <StickyScrollable title={t('settings.general')}>
+                    <FormControl>
+                      <FormLabel>{t('settings.confirmOnDelete')}</FormLabel>
+                      <Switch isChecked={shouldConfirmOnDelete} onChange={handleChangeShouldConfirmOnDelete} />
+                    </FormControl>
+                    <FormControl>
+                      <FormLabel>{t('settings.confirmOnNewSession')}</FormLabel>
+                      <Switch isChecked={shouldConfirmOnNewSession} onChange={onToggleConfirmOnNewSession} />
+                    </FormControl>
+                  </StickyScrollable>
 
-              <StyledFlex>
-                <Heading size="sm">{t('settings.generation')}</Heading>
-                <SettingsSchedulers />
-              </StyledFlex>
+                  <StickyScrollable title={t('settings.generation')}>
+                    <FormControl isDisabled={!isNSFWCheckerAvailable}>
+                      <FormLabel>{t('settings.enableNSFWChecker')}</FormLabel>
+                      <Switch isChecked={shouldUseNSFWChecker} onChange={handleChangeShouldUseNSFWChecker} />
+                    </FormControl>
+                    <FormControl isDisabled={!isWatermarkerAvailable}>
+                      <FormLabel>{t('settings.enableInvisibleWatermark')}</FormLabel>
+                      <Switch isChecked={shouldUseWatermarker} onChange={handleChangeShouldUseWatermarker} />
+                    </FormControl>
+                  </StickyScrollable>
 
-              <StyledFlex>
-                <Heading size="sm">{t('settings.ui')}</Heading>
-                <IAISwitch
-                  label={t('settings.displayHelpIcons')}
-                  isChecked={shouldDisplayGuides}
-                  onChange={(e: ChangeEvent<HTMLInputElement>) =>
-                    dispatch(setShouldDisplayGuides(e.target.checked))
-                  }
-                />
-                {shouldShowBetaLayout && (
-                  <IAISwitch
-                    label={t('settings.useCanvasBeta')}
-                    isChecked={shouldUseCanvasBetaLayout}
-                    onChange={(e: ChangeEvent<HTMLInputElement>) =>
-                      dispatch(setShouldUseCanvasBetaLayout(e.target.checked))
-                    }
-                  />
-                )}
-                <IAISwitch
-                  label={t('settings.useSlidersForAll')}
-                  isChecked={shouldUseSliders}
-                  onChange={(e: ChangeEvent<HTMLInputElement>) =>
-                    dispatch(setShouldUseSliders(e.target.checked))
-                  }
-                />
-                <IAISwitch
-                  label={t('settings.showProgressInViewer')}
-                  isChecked={shouldShowProgressInViewer}
-                  onChange={(e: ChangeEvent<HTMLInputElement>) =>
-                    dispatch(setShouldShowProgressInViewer(e.target.checked))
-                  }
-                />
-                <IAISwitch
-                  label={t('settings.antialiasProgressImages')}
-                  isChecked={shouldAntialiasProgressImage}
-                  onChange={(e: ChangeEvent<HTMLInputElement>) =>
-                    dispatch(
-                      shouldAntialiasProgressImageChanged(e.target.checked)
-                    )
-                  }
-                />
-              </StyledFlex>
+                  <StickyScrollable title={t('settings.ui')}>
+                    <FormControl>
+                      <FormLabel>{t('settings.showProgressInViewer')}</FormLabel>
+                      <Switch
+                        isChecked={shouldShowProgressInViewer}
+                        onChange={handleChangeShouldShowProgressInViewer}
+                      />
+                    </FormControl>
+                    <FormControl>
+                      <FormLabel>{t('settings.antialiasProgressImages')}</FormLabel>
+                      <Switch
+                        isChecked={shouldAntialiasProgressImage}
+                        onChange={handleChangeShouldAntialiasProgressImage}
+                      />
+                    </FormControl>
+                    {Boolean(config?.shouldShowInvocationProgressDetailSetting) && (
+                      <FormControl>
+                        <FormLabel>{t('settings.showDetailedInvocationProgress')}</FormLabel>
+                        <Switch
+                          isChecked={shouldShowInvocationProgressDetail}
+                          onChange={handleChangeShouldShowInvocationProgressDetail}
+                        />
+                      </FormControl>
+                    )}
+                    <FormControl>
+                      <InformationalPopover feature="noiseUseCPU" inPortal={false}>
+                        <FormLabel>{t('parameters.useCpuNoise')}</FormLabel>
+                      </InformationalPopover>
+                      <Switch isChecked={shouldUseCpuNoise} onChange={handleChangeShouldUseCpuNoise} />
+                    </FormControl>
+                    {Boolean(config?.shouldShowLocalizationToggle) && <SettingsLanguageSelect />}
+                    <FormControl>
+                      <FormLabel>{t('settings.enableInformationalPopovers')}</FormLabel>
+                      <Switch
+                        isChecked={shouldEnableInformationalPopovers}
+                        onChange={handleChangeShouldEnableInformationalPopovers}
+                      />
+                    </FormControl>
+                    <FormControl>
+                      <FormLabel>{t('settings.enableModelDescriptions')}</FormLabel>
+                      <Switch
+                        isChecked={shouldEnableModelDescriptions}
+                        onChange={handleChangeShouldEnableModelDescriptions}
+                      />
+                    </FormControl>
+                  </StickyScrollable>
 
-              {shouldShowDeveloperSettings && (
-                <StyledFlex>
-                  <Heading size="sm">{t('settings.developer')}</Heading>
-                  <IAISwitch
-                    label={t('settings.shouldLogToConsole')}
-                    isChecked={shouldLogToConsole}
-                    onChange={handleLogToConsoleChanged}
-                  />
-                  <IAIMantineSelect
-                    disabled={!shouldLogToConsole}
-                    label={t('settings.consoleLogLevel')}
-                    onChange={handleLogLevelChanged}
-                    value={consoleLogLevel}
-                    data={VALID_LOG_LEVELS.concat()}
-                  />
-                  <IAISwitch
-                    label={t('settings.enableImageDebugging')}
-                    isChecked={enableImageDebugging}
-                    onChange={(e: ChangeEvent<HTMLInputElement>) =>
-                      dispatch(setEnableImageDebugging(e.target.checked))
-                    }
-                  />
-                </StyledFlex>
-              )}
+                  {Boolean(config?.shouldShowDeveloperSettings) && (
+                    <StickyScrollable title={t('settings.developer')}>
+                      <SettingsDeveloperLogIsEnabled />
+                      <SettingsDeveloperLogLevel />
+                      <SettingsDeveloperLogNamespaces />
+                    </StickyScrollable>
+                  )}
 
-              <StyledFlex>
-                <Heading size="sm">{t('settings.resetWebUI')}</Heading>
-                <IAIButton colorScheme="error" onClick={handleClickResetWebUI}>
-                  {t('settings.resetWebUI')}
-                </IAIButton>
-                {shouldShowResetWebUiText && (
-                  <>
-                    <Text>{t('settings.resetWebUIDesc1')}</Text>
-                    <Text>{t('settings.resetWebUIDesc2')}</Text>
-                  </>
-                )}
-              </StyledFlex>
-            </Flex>
+                  {Boolean(config?.shouldShowClearIntermediates) && (
+                    <StickyScrollable title={t('settings.clearIntermediates')}>
+                      <Button
+                        tooltip={hasPendingItems ? t('settings.clearIntermediatesDisabled') : undefined}
+                        colorScheme="warning"
+                        onClick={clearIntermediates}
+                        isLoading={isLoadingClearIntermediates}
+                        isDisabled={!intermediatesCount || hasPendingItems}
+                      >
+                        {t('settings.clearIntermediatesWithCount', {
+                          count: intermediatesCount ?? 0,
+                        })}
+                      </Button>
+                      <Text fontWeight="bold">{t('settings.clearIntermediatesDesc1')}</Text>
+                      <Text variant="subtext">{t('settings.clearIntermediatesDesc2')}</Text>
+                      <Text variant="subtext">{t('settings.clearIntermediatesDesc3')}</Text>
+                    </StickyScrollable>
+                  )}
+
+                  <StickyScrollable title={t('settings.resetWebUI')}>
+                    <Button colorScheme="error" onClick={handleClickResetWebUI}>
+                      {t('settings.resetWebUI')}
+                    </Button>
+                    {Boolean(config?.shouldShowResetWebUiText) && (
+                      <>
+                        <Text variant="subtext">{t('settings.resetWebUIDesc1')}</Text>
+                        <Text variant="subtext">{t('settings.resetWebUIDesc2')}</Text>
+                      </>
+                    )}
+                  </StickyScrollable>
+                </FormControlGroup>
+              </Flex>
+            </ScrollableContent>
           </ModalBody>
 
-          <ModalFooter>
-            <IAIButton onClick={onSettingsModalClose}>
-              {t('common.close')}
-            </IAIButton>
-          </ModalFooter>
-        </ModalContent>
-      </Modal>
-
-      <Modal
-        closeOnOverlayClick={false}
-        isOpen={isRefreshModalOpen}
-        onClose={onRefreshModalClose}
-        isCentered
-      >
-        <ModalOverlay backdropFilter="blur(40px)" />
-        <ModalContent>
-          <ModalHeader />
-          <ModalBody>
-            <Flex justifyContent="center">
-              <Text fontSize="lg">
-                <Text>{t('settings.resetComplete')}</Text>
-              </Text>
-            </Flex>
-          </ModalBody>
           <ModalFooter />
         </ModalContent>
       </Modal>
@@ -310,20 +315,4 @@ const SettingsModal = ({ children, config }: SettingsModalProps) => {
   );
 };
 
-export default SettingsModal;
-
-const StyledFlex = (props: PropsWithChildren) => {
-  return (
-    <Flex
-      layerStyle="second"
-      sx={{
-        flexDirection: 'column',
-        gap: 2,
-        p: 4,
-        borderRadius: 'base',
-      }}
-    >
-      {props.children}
-    </Flex>
-  );
-};
+export default memo(SettingsModal);
