@@ -1,42 +1,40 @@
-import { Flex, Text, Image } from '@chakra-ui/react';
-import { RootState } from 'app/store/store';
-import { useAppSelector } from 'app/store/storeHooks';
-import InvokeAILogoImage from 'assets/images/logo.png';
+/* eslint-disable i18next/no-literal-string */
+import { Image, Text, Tooltip } from '@invoke-ai/ui-library';
+import { useStore } from '@nanostores/react';
+import { $logo } from 'app/store/nanostores/logo';
+import InvokeLogoYellow from 'public/assets/images/invoke-symbol-ylw-lrg.svg';
+import { memo, useMemo, useRef } from 'react';
+import { useGetAppVersionQuery } from 'services/api/endpoints/appInfo';
 
 const InvokeAILogoComponent = () => {
-  const appVersion = useAppSelector(
-    (state: RootState) => state.system.app_version
-  );
+  const { data: appVersion } = useGetAppVersionQuery();
+  const ref = useRef(null);
+  const logoOverride = useStore($logo);
+  const tooltip = useMemo(() => {
+    if (appVersion) {
+      return <Text fontWeight="semibold">v{appVersion.version}</Text>;
+    }
+    return null;
+  }, [appVersion]);
+
+  if (logoOverride) {
+    return logoOverride;
+  }
 
   return (
-    <Flex alignItems="center" gap={3} ps={1}>
+    <Tooltip placement="right" label={tooltip} p={1} px={2} gutter={16}>
       <Image
-        src={InvokeAILogoImage}
-        alt="invoke-ai-logo"
-        sx={{
-          w: '32px',
-          h: '32px',
-          minW: '32px',
-          minH: '32px',
-          userSelect: 'none',
-        }}
+        ref={ref}
+        src={InvokeLogoYellow}
+        alt="invoke-logo"
+        w="24px"
+        h="24px"
+        minW="24px"
+        minH="24px"
+        userSelect="none"
       />
-      <Flex sx={{ gap: 3 }}>
-        <Text sx={{ fontSize: 'xl', userSelect: 'none' }}>
-          invoke <strong>ai</strong>
-        </Text>
-        <Text
-          sx={{
-            fontWeight: 300,
-            marginTop: 1,
-          }}
-          variant="subtext"
-        >
-          {appVersion}
-        </Text>
-      </Flex>
-    </Flex>
+    </Tooltip>
   );
 };
 
-export default InvokeAILogoComponent;
+export default memo(InvokeAILogoComponent);

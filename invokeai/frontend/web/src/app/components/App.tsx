@@ -1,169 +1,136 @@
-import { Box, Flex, Grid, Portal } from '@chakra-ui/react';
+import { Box, useGlobalModifiersInit } from '@invoke-ai/ui-library';
+import { GlobalImageHotkeys } from 'app/components/GlobalImageHotkeys';
+import type { StudioInitAction } from 'app/hooks/useStudioInitAction';
+import { useStudioInitAction } from 'app/hooks/useStudioInitAction';
+import { useSyncQueueStatus } from 'app/hooks/useSyncQueueStatus';
 import { useLogger } from 'app/logging/useLogger';
+import { useSyncLoggingConfig } from 'app/logging/useSyncLoggingConfig';
+import { appStarted } from 'app/store/middleware/listenerMiddleware/listeners/appStarted';
 import { useAppDispatch, useAppSelector } from 'app/store/storeHooks';
-import { PartialAppConfig } from 'app/types/invokeai';
-import ImageUploader from 'common/components/ImageUploader';
-import Loading from 'common/components/Loading/Loading';
-import GalleryDrawer from 'features/gallery/components/GalleryPanel';
-import Lightbox from 'features/lightbox/components/Lightbox';
-import SiteHeader from 'features/system/components/SiteHeader';
-import { useFeatureStatus } from 'features/system/hooks/useFeatureStatus';
-import { useIsApplicationReady } from 'features/system/hooks/useIsApplicationReady';
+import type { PartialAppConfig } from 'app/types/invokeai';
+import { useFocusRegionWatcher } from 'common/hooks/focus';
+import { useClearStorage } from 'common/hooks/useClearStorage';
+import { useGlobalHotkeys } from 'common/hooks/useGlobalHotkeys';
+import ChangeBoardModal from 'features/changeBoardModal/components/ChangeBoardModal';
+import { CanvasPasteModal } from 'features/controlLayers/components/CanvasPasteModal';
+import {
+  NewCanvasSessionDialog,
+  NewGallerySessionDialog,
+} from 'features/controlLayers/components/NewSessionConfirmationAlertDialog';
+import { CanvasManagerProviderGate } from 'features/controlLayers/contexts/CanvasManagerProviderGate';
+import DeleteImageModal from 'features/deleteImageModal/components/DeleteImageModal';
+import { FullscreenDropzone } from 'features/dnd/FullscreenDropzone';
+import { DynamicPromptsModal } from 'features/dynamicPrompts/components/DynamicPromptsPreviewModal';
+import DeleteBoardModal from 'features/gallery/components/Boards/DeleteBoardModal';
+import { ImageContextMenu } from 'features/gallery/components/ImageContextMenu/ImageContextMenu';
+import { useStarterModelsToast } from 'features/modelManagerV2/hooks/useStarterModelsToast';
+import { ShareWorkflowModal } from 'features/nodes/components/sidePanel/WorkflowListMenu/ShareWorkflowModal';
+import { CancelAllExceptCurrentQueueItemConfirmationAlertDialog } from 'features/queue/components/CancelAllExceptCurrentQueueItemConfirmationAlertDialog';
+import { ClearQueueConfirmationsAlertDialog } from 'features/queue/components/ClearQueueConfirmationAlertDialog';
+import { useReadinessWatcher } from 'features/queue/store/readiness';
+import { DeleteStylePresetDialog } from 'features/stylePresets/components/DeleteStylePresetDialog';
+import { StylePresetModal } from 'features/stylePresets/components/StylePresetForm/StylePresetModal';
+import RefreshAfterResetModal from 'features/system/components/SettingsModal/RefreshAfterResetModal';
+import { VideosModal } from 'features/system/components/VideosModal/VideosModal';
 import { configChanged } from 'features/system/store/configSlice';
-import { languageSelector } from 'features/system/store/systemSelectors';
-import FloatingGalleryButton from 'features/ui/components/FloatingGalleryButton';
-import FloatingParametersPanelButtons from 'features/ui/components/FloatingParametersPanelButtons';
-import InvokeTabs from 'features/ui/components/InvokeTabs';
-import ParametersDrawer from 'features/ui/components/ParametersDrawer';
-import { AnimatePresence, motion } from 'framer-motion';
+import { selectLanguage } from 'features/system/store/systemSelectors';
+import { AppContent } from 'features/ui/components/AppContent';
+import { DeleteWorkflowDialog } from 'features/workflowLibrary/components/DeleteLibraryWorkflowConfirmationAlertDialog';
+import { NewWorkflowConfirmationAlertDialog } from 'features/workflowLibrary/components/NewWorkflowConfirmationAlertDialog';
 import i18n from 'i18n';
-import { ReactNode, memo, useCallback, useEffect, useState } from 'react';
-import { APP_HEIGHT, APP_WIDTH } from 'theme/util/constants';
-import GlobalHotkeys from './GlobalHotkeys';
-import Toaster from './Toaster';
-import DeleteImageModal from 'features/gallery/components/DeleteImageModal';
-import { requestCanvasRescale } from 'features/canvas/store/thunks/requestCanvasScale';
-import UpdateImageBoardModal from '../../features/gallery/components/Boards/UpdateImageBoardModal';
-import { useListModelsQuery } from 'services/api/endpoints/models';
-import DeleteBoardImagesModal from '../../features/gallery/components/Boards/DeleteBoardImagesModal';
+import { size } from 'lodash-es';
+import { memo, useCallback, useEffect } from 'react';
+import { ErrorBoundary } from 'react-error-boundary';
+import { useGetOpenAPISchemaQuery } from 'services/api/endpoints/appInfo';
+import { useSocketIO } from 'services/events/useSocketIO';
+
+import AppErrorBoundaryFallback from './AppErrorBoundaryFallback';
 
 const DEFAULT_CONFIG = {};
 
 interface Props {
   config?: PartialAppConfig;
-  headerComponent?: ReactNode;
-  setIsReady?: (isReady: boolean) => void;
+  studioInitAction?: StudioInitAction;
 }
 
-const App = ({
-  config = DEFAULT_CONFIG,
-  headerComponent,
-  setIsReady,
-}: Props) => {
-  const language = useAppSelector(languageSelector);
+const App = ({ config = DEFAULT_CONFIG, studioInitAction }: Props) => {
+  const clearStorage = useClearStorage();
 
-  const log = useLogger();
-
-  const isLightboxEnabled = useFeatureStatus('lightbox').isFeatureEnabled;
-
-  const isApplicationReady = useIsApplicationReady();
-
-  const { data: pipelineModels } = useListModelsQuery({
-    model_type: 'main',
-  });
-  const { data: controlnetModels } = useListModelsQuery({
-    model_type: 'controlnet',
-  });
-  const { data: vaeModels } = useListModelsQuery({ model_type: 'vae' });
-  const { data: loraModels } = useListModelsQuery({ model_type: 'lora' });
-  const { data: embeddingModels } = useListModelsQuery({
-    model_type: 'embedding',
-  });
-
-  const [loadingOverridden, setLoadingOverridden] = useState(false);
-
-  const dispatch = useAppDispatch();
-
-  useEffect(() => {
-    i18n.changeLanguage(language);
-  }, [language]);
-
-  useEffect(() => {
-    log.info({ namespace: 'App', data: config }, 'Received config');
-    dispatch(configChanged(config));
-  }, [dispatch, config, log]);
-
-  const handleOverrideClicked = useCallback(() => {
-    setLoadingOverridden(true);
-  }, []);
-
-  useEffect(() => {
-    if (isApplicationReady && setIsReady) {
-      setIsReady(true);
-    }
-
-    if (isApplicationReady) {
-      // TODO: This is a jank fix for canvas not filling the screen on first load
-      setTimeout(() => {
-        dispatch(requestCanvasRescale());
-      }, 200);
-    }
-
-    return () => {
-      setIsReady && setIsReady(false);
-    };
-  }, [dispatch, isApplicationReady, setIsReady]);
+  const handleReset = useCallback(() => {
+    clearStorage();
+    location.reload();
+    return false;
+  }, [clearStorage]);
 
   return (
-    <>
-      <Grid w="100vw" h="100vh" position="relative" overflow="hidden">
-        {isLightboxEnabled && <Lightbox />}
-        <ImageUploader>
-          <Grid
-            sx={{
-              gap: 4,
-              p: 4,
-              gridAutoRows: 'min-content auto',
-              w: 'full',
-              h: 'full',
-            }}
-          >
-            {headerComponent || <SiteHeader />}
-            <Flex
-              sx={{
-                gap: 4,
-                w: 'full',
-                h: 'full',
-              }}
-            >
-              <InvokeTabs />
-            </Flex>
-          </Grid>
-        </ImageUploader>
-
-        <GalleryDrawer />
-        <ParametersDrawer />
-
-        <AnimatePresence>
-          {!isApplicationReady && !loadingOverridden && (
-            <motion.div
-              key="loading"
-              initial={{ opacity: 1 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              transition={{ duration: 0.3 }}
-              style={{ zIndex: 3 }}
-            >
-              <Box position="absolute" top={0} left={0} w="100vw" h="100vh">
-                <Loading />
-              </Box>
-              <Box
-                onClick={handleOverrideClicked}
-                position="absolute"
-                top={0}
-                right={0}
-                cursor="pointer"
-                w="2rem"
-                h="2rem"
-              />
-            </motion.div>
-          )}
-        </AnimatePresence>
-
-        <Portal>
-          <FloatingParametersPanelButtons />
-        </Portal>
-        <Portal>
-          <FloatingGalleryButton />
-        </Portal>
-      </Grid>
+    <ErrorBoundary onReset={handleReset} FallbackComponent={AppErrorBoundaryFallback}>
+      <Box id="invoke-app-wrapper" w="100dvw" h="100dvh" position="relative" overflow="hidden">
+        <AppContent />
+      </Box>
+      <HookIsolator config={config} studioInitAction={studioInitAction} />
       <DeleteImageModal />
-      <UpdateImageBoardModal />
-      <DeleteBoardImagesModal />
-      <Toaster />
-      <GlobalHotkeys />
-    </>
+      <ChangeBoardModal />
+      <DynamicPromptsModal />
+      <StylePresetModal />
+      <CancelAllExceptCurrentQueueItemConfirmationAlertDialog />
+      <ClearQueueConfirmationsAlertDialog />
+      <NewWorkflowConfirmationAlertDialog />
+      <DeleteStylePresetDialog />
+      <DeleteWorkflowDialog />
+      <ShareWorkflowModal />
+      <RefreshAfterResetModal />
+      <DeleteBoardModal />
+      <GlobalImageHotkeys />
+      <NewGallerySessionDialog />
+      <NewCanvasSessionDialog />
+      <ImageContextMenu />
+      <FullscreenDropzone />
+      <VideosModal />
+      <CanvasManagerProviderGate>
+        <CanvasPasteModal />
+      </CanvasManagerProviderGate>
+    </ErrorBoundary>
   );
 };
 
 export default memo(App);
+
+// Running these hooks in a separate component ensures we do not inadvertently rerender the entire app when they change.
+const HookIsolator = memo(
+  ({ config, studioInitAction }: { config: PartialAppConfig; studioInitAction?: StudioInitAction }) => {
+    const language = useAppSelector(selectLanguage);
+    const logger = useLogger('system');
+    const dispatch = useAppDispatch();
+
+    // singleton!
+    useReadinessWatcher();
+    useSocketIO();
+    useGlobalModifiersInit();
+    useGlobalHotkeys();
+    useGetOpenAPISchemaQuery();
+    useSyncLoggingConfig();
+
+    useEffect(() => {
+      i18n.changeLanguage(language);
+    }, [language]);
+
+    useEffect(() => {
+      if (size(config)) {
+        logger.info({ config }, 'Received config');
+        dispatch(configChanged(config));
+      }
+    }, [dispatch, config, logger]);
+
+    useEffect(() => {
+      dispatch(appStarted());
+    }, [dispatch]);
+
+    useStudioInitAction(studioInitAction);
+    useStarterModelsToast();
+    useSyncQueueStatus();
+    useFocusRegionWatcher();
+
+    return null;
+  }
+);
+HookIsolator.displayName = 'HookIsolator';

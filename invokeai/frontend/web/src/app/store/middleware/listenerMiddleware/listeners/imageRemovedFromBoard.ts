@@ -1,40 +1,23 @@
-import { log } from 'app/logging/useLogger';
-import { startAppListening } from '..';
-import { imageMetadataReceived } from 'services/api/thunks/image';
-import { boardImagesApi } from 'services/api/endpoints/boardImages';
+import { logger } from 'app/logging/logger';
+import type { AppStartListening } from 'app/store/middleware/listenerMiddleware';
+import { imagesApi } from 'services/api/endpoints/images';
 
-const moduleLog = log.child({ namespace: 'boards' });
+const log = logger('gallery');
 
-export const addImageRemovedFromBoardFulfilledListener = () => {
+export const addImageRemovedFromBoardFulfilledListener = (startAppListening: AppStartListening) => {
   startAppListening({
-    matcher: boardImagesApi.endpoints.removeImageFromBoard.matchFulfilled,
-    effect: (action, { getState, dispatch }) => {
-      const { board_id, image_name } = action.meta.arg.originalArgs;
-
-      moduleLog.debug(
-        { data: { board_id, image_name } },
-        'Image added to board'
-      );
-
-      dispatch(
-        imageMetadataReceived({
-          image_name,
-        })
-      );
+    matcher: imagesApi.endpoints.removeImageFromBoard.matchFulfilled,
+    effect: (action) => {
+      const imageDTO = action.meta.arg.originalArgs;
+      log.debug({ imageDTO }, 'Image removed from board');
     },
   });
-};
 
-export const addImageRemovedFromBoardRejectedListener = () => {
   startAppListening({
-    matcher: boardImagesApi.endpoints.removeImageFromBoard.matchRejected,
-    effect: (action, { getState, dispatch }) => {
-      const { board_id, image_name } = action.meta.arg.originalArgs;
-
-      moduleLog.debug(
-        { data: { board_id, image_name } },
-        'Problem adding image to board'
-      );
+    matcher: imagesApi.endpoints.removeImageFromBoard.matchRejected,
+    effect: (action) => {
+      const imageDTO = action.meta.arg.originalArgs;
+      log.debug({ imageDTO }, 'Problem removing image from board');
     },
   });
 };

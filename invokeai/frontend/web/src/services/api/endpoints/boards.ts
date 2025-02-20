@@ -1,49 +1,37 @@
-import { BoardDTO, OffsetPaginatedResults_BoardDTO_ } from 'services/api/types';
-import { ApiFullTagDescription, LIST_TAG, api } from '..';
-import { paths } from '../schema';
+import { ASSETS_CATEGORIES, IMAGE_CATEGORIES } from 'features/gallery/store/types';
+import type {
+  BoardDTO,
+  CreateBoardArg,
+  ListBoardsArgs,
+  OffsetPaginatedResults_ImageDTO_,
+  UpdateBoardArg,
+} from 'services/api/types';
+import { getListImagesUrl } from 'services/api/util';
 
-type ListBoardsArg = NonNullable<
-  paths['/api/v1/boards/']['get']['parameters']['query']
->;
+import type { ApiTagDescription } from '..';
+import { api, buildV1Url, LIST_TAG } from '..';
 
-type UpdateBoardArg =
-  paths['/api/v1/boards/{board_id}']['patch']['parameters']['path'] & {
-    changes: paths['/api/v1/boards/{board_id}']['patch']['requestBody']['content']['application/json'];
-  };
+/**
+ * Builds an endpoint URL for the boards router
+ * @example
+ * buildBoardsUrl('some-path')
+ * // '/api/v1/boards/some-path'
+ */
+export const buildBoardsUrl = (path: string = '') => buildV1Url(`boards/${path}`);
 
 export const boardsApi = api.injectEndpoints({
   endpoints: (build) => ({
     /**
      * Boards Queries
      */
-    listBoards: build.query<OffsetPaginatedResults_BoardDTO_, ListBoardsArg>({
-      query: (arg) => ({ url: 'boards/', params: arg }),
-      providesTags: (result, error, arg) => {
-        // any list of boards
-        const tags: ApiFullTagDescription[] = [{ id: 'Board', type: LIST_TAG }];
-
-        if (result) {
-          // and individual tags for each board
-          tags.push(
-            ...result.items.map(({ board_id }) => ({
-              type: 'Board' as const,
-              id: board_id,
-            }))
-          );
-        }
-
-        return tags;
-      },
-    }),
-
-    listAllBoards: build.query<Array<BoardDTO>, void>({
-      query: () => ({
-        url: 'boards/',
-        params: { all: true },
+    listAllBoards: build.query<Array<BoardDTO>, ListBoardsArgs>({
+      query: (args) => ({
+        url: buildBoardsUrl(),
+        params: { all: true, ...args },
       }),
-      providesTags: (result, error, arg) => {
+      providesTags: (result) => {
         // any list of boards
-        const tags: ApiFullTagDescription[] = [{ id: 'Board', type: LIST_TAG }];
+        const tags: ApiTagDescription[] = [{ type: 'Board', id: LIST_TAG }, 'FetchOnReconnect'];
 
         if (result) {
           // and individual tags for each board
@@ -59,45 +47,86 @@ export const boardsApi = api.injectEndpoints({
       },
     }),
 
+    listAllImageNamesForBoard: build.query<Array<string>, string>({
+      query: (board_id) => ({
+        url: buildBoardsUrl(`${board_id}/image_names`),
+      }),
+      providesTags: (result, error, arg) => [{ type: 'ImageNameList', id: arg }, 'FetchOnReconnect'],
+      keepUnusedDataFor: 0,
+    }),
+
+    getBoardImagesTotal: build.query<{ total: number }, string | undefined>({
+      query: (board_id) => ({
+        url: getListImagesUrl({
+          board_id: board_id ?? 'none',
+          categories: IMAGE_CATEGORIES,
+          is_intermediate: false,
+          limit: 0,
+          offset: 0,
+        }),
+        method: 'GET',
+      }),
+      providesTags: (result, error, arg) => [{ type: 'BoardImagesTotal', id: arg ?? 'none' }, 'FetchOnReconnect'],
+      transformResponse: (response: OffsetPaginatedResults_ImageDTO_) => {
+        return { total: response.total };
+      },
+    }),
+
+    getBoardAssetsTotal: build.query<{ total: number }, string | undefined>({
+      query: (board_id) => ({
+        url: getListImagesUrl({
+          board_id: board_id ?? 'none',
+          categories: ASSETS_CATEGORIES,
+          is_intermediate: false,
+          limit: 0,
+          offset: 0,
+        }),
+        method: 'GET',
+      }),
+      providesTags: (result, error, arg) => [{ type: 'BoardAssetsTotal', id: arg ?? 'none' }, 'FetchOnReconnect'],
+      transformResponse: (response: OffsetPaginatedResults_ImageDTO_) => {
+        return { total: response.total };
+      },
+    }),
+
     /**
      * Boards Mutations
      */
 
-    createBoard: build.mutation<BoardDTO, string>({
-      query: (board_name) => ({
-        url: `boards/`,
+    createBoard: build.mutation<BoardDTO, CreateBoardArg>({
+      query: ({ board_name, is_private }) => ({
+        url: buildBoardsUrl(),
         method: 'POST',
-        params: { board_name },
+        params: { board_name, is_private },
       }),
-      invalidatesTags: [{ id: 'Board', type: LIST_TAG }],
+      invalidatesTags: [{ type: 'Board', id: LIST_TAG }],
     }),
 
     updateBoard: build.mutation<BoardDTO, UpdateBoardArg>({
       query: ({ board_id, changes }) => ({
-        url: `boards/${board_id}`,
+        url: buildBoardsUrl(board_id),
         method: 'PATCH',
         body: changes,
       }),
-      invalidatesTags: (result, error, arg) => [
-        { type: 'Board', id: arg.board_id },
-      ],
-    }),
-    deleteBoard: build.mutation<void, string>({
-      query: (board_id) => ({ url: `boards/${board_id}`, method: 'DELETE' }),
-      invalidatesTags: (result, error, arg) => [{ type: 'Board', id: arg }],
-    }),
-    deleteBoardAndImages: build.mutation<void, string>({
-      query: (board_id) => ({ url: `boards/${board_id}`, method: 'DELETE', params: { include_images: true } }),
-      invalidatesTags: (result, error, arg) => [{ type: 'Board', id: arg }, { type: 'Image', id: LIST_TAG }],
+      invalidatesTags: (result, error, arg) => {
+        const tags: ApiTagDescription[] = [];
+        if (Object.keys(arg.changes).includes('archived')) {
+          tags.push({ type: 'Board', id: LIST_TAG });
+        }
+
+        tags.push({ type: 'Board', id: arg.board_id });
+
+        return tags;
+      },
     }),
   }),
 });
 
 export const {
-  useListBoardsQuery,
   useListAllBoardsQuery,
+  useGetBoardImagesTotalQuery,
+  useGetBoardAssetsTotalQuery,
   useCreateBoardMutation,
   useUpdateBoardMutation,
-  useDeleteBoardMutation,
-  useDeleteBoardAndImagesMutation
+  useListAllImageNamesForBoardQuery,
 } = boardsApi;

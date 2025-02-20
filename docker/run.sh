@@ -1,41 +1,36 @@
 #!/usr/bin/env bash
-set -e
+set -e -o pipefail
 
-# How to use: https://invoke-ai.github.io/InvokeAI/installation/040_INSTALL_DOCKER/
+run() {
+  local scriptdir=$(dirname "${BASH_SOURCE[0]}")
+  cd "$scriptdir" || exit 1
 
-SCRIPTDIR=$(dirname "${BASH_SOURCE[0]}")
-cd "$SCRIPTDIR" || exit 1
+  local build_args=""
+  local profile=""
 
-source ./env.sh
+  # create .env file if it doesn't exist, otherwise docker compose will fail
+  touch .env
 
-# Create outputs directory if it does not exist
-[[ -d ./outputs ]] || mkdir ./outputs
+  # parse .env file for build args
+  build_args=$(awk '$1 ~ /=[^$]/ && $0 !~ /^#/ {print "--build-arg " $0 " "}' .env) &&
+  profile="$(awk -F '=' '/GPU_DRIVER/ {print $2}' .env)"
 
-echo -e "You are using these values:\n"
-echo -e "Volumename:\t${VOLUMENAME}"
-echo -e "Invokeai_tag:\t${CONTAINER_IMAGE}"
-echo -e "local Models:\t${MODELSPATH:-unset}\n"
+  # default to 'cuda' profile
+  [[ -z "$profile" ]] && profile="cuda"
 
-docker run \
-  --interactive \
-  --tty \
-  --rm \
-  --platform="${PLATFORM}" \
-  --name="${REPOSITORY_NAME}" \
-  --hostname="${REPOSITORY_NAME}" \
-  --mount type=volume,volume-driver=local,source="${VOLUMENAME}",target=/data \
-  --mount type=bind,source="$(pwd)"/outputs/,target=/data/outputs/ \
-  ${MODELSPATH:+--mount="type=bind,source=${MODELSPATH},target=/data/models"} \
-  ${HUGGING_FACE_HUB_TOKEN:+--env="HUGGING_FACE_HUB_TOKEN=${HUGGING_FACE_HUB_TOKEN}"} \
-  --publish=9090:9090 \
-  --cap-add=sys_nice \
-  ${GPU_FLAGS:+--gpus="${GPU_FLAGS}"} \
-  "${CONTAINER_IMAGE}" ${@:+$@}
+  local service_name="invokeai-$profile"
 
-echo -e "\nCleaning trash folder ..."
-for f in outputs/.Trash*; do
-  if [ -e "$f" ]; then
-    rm -Rf "$f"
-    break
+  if [[ ! -z "$build_args" ]]; then
+    printf "%s\n" "docker compose build args:"
+    printf "%s\n" "$build_args"
   fi
-done
+
+  docker compose build $build_args $service_name
+  unset build_args
+
+  printf "%s\n" "starting service $service_name"
+  docker compose --profile "$profile" up -d "$service_name"
+  docker compose logs -f
+}
+
+run

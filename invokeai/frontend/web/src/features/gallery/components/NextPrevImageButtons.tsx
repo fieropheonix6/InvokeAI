@@ -1,178 +1,93 @@
-import { ChakraProps, Flex, Grid, IconButton } from '@chakra-ui/react';
-import { createSelector } from '@reduxjs/toolkit';
-import { useAppDispatch, useAppSelector } from 'app/store/storeHooks';
-import { clamp, isEqual } from 'lodash-es';
-import { useCallback, useState } from 'react';
+import type { ChakraProps } from '@invoke-ai/ui-library';
+import { Box, IconButton } from '@invoke-ai/ui-library';
+import { useGalleryImages } from 'features/gallery/hooks/useGalleryImages';
+import { useGalleryNavigation } from 'features/gallery/hooks/useGalleryNavigation';
+import { useGalleryPagination } from 'features/gallery/hooks/useGalleryPagination';
+import { memo, useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
-import { FaAngleLeft, FaAngleRight } from 'react-icons/fa';
-import { gallerySelector } from '../store/gallerySelectors';
-import { RootState } from 'app/store/store';
-import { imageSelected } from '../store/gallerySlice';
-import { useHotkeys } from 'react-hotkeys-hook';
-import {
-  selectFilteredImagesAsObject,
-  selectFilteredImagesIds,
-} from '../store/imagesSlice';
+import { PiCaretLeftBold, PiCaretRightBold } from 'react-icons/pi';
 
-const nextPrevButtonTriggerAreaStyles: ChakraProps['sx'] = {
-  height: '100%',
-  width: '15%',
-  alignItems: 'center',
-  pointerEvents: 'auto',
-};
-const nextPrevButtonStyles: ChakraProps['sx'] = {
-  color: 'base.100',
-};
-
-export const nextPrevImageButtonsSelector = createSelector(
-  [
-    (state: RootState) => state,
-    gallerySelector,
-    selectFilteredImagesAsObject,
-    selectFilteredImagesIds,
-  ],
-  (state, gallery, filteredImagesAsObject, filteredImageIds) => {
-    const { selectedImage } = gallery;
-
-    if (!selectedImage) {
-      return {
-        isOnFirstImage: true,
-        isOnLastImage: true,
-      };
-    }
-
-    const currentImageIndex = filteredImageIds.findIndex(
-      (i) => i === selectedImage
-    );
-
-    const nextImageIndex = clamp(
-      currentImageIndex + 1,
-      0,
-      filteredImageIds.length - 1
-    );
-
-    const prevImageIndex = clamp(
-      currentImageIndex - 1,
-      0,
-      filteredImageIds.length - 1
-    );
-
-    const nextImageId = filteredImageIds[nextImageIndex];
-    const prevImageId = filteredImageIds[prevImageIndex];
-
-    const nextImage = filteredImagesAsObject[nextImageId];
-    const prevImage = filteredImagesAsObject[prevImageId];
-
-    const imagesLength = filteredImageIds.length;
-
-    return {
-      isOnFirstImage: currentImageIndex === 0,
-      isOnLastImage:
-        !isNaN(currentImageIndex) && currentImageIndex === imagesLength - 1,
-      nextImage,
-      prevImage,
-      nextImageId,
-      prevImageId,
-    };
-  },
-  {
-    memoizeOptions: {
-      resultEqualityCheck: isEqual,
-    },
-  }
-);
-
-const NextPrevImageButtons = () => {
-  const dispatch = useAppDispatch();
+const NextPrevImageButtons = ({ inset = 8 }: { inset?: ChakraProps['insetInlineStart' | 'insetInlineEnd'] }) => {
   const { t } = useTranslation();
+  const { prevImage, nextImage, isOnFirstImageOfView, isOnLastImageOfView } = useGalleryNavigation();
 
-  const { isOnFirstImage, isOnLastImage, nextImageId, prevImageId } =
-    useAppSelector(nextPrevImageButtonsSelector);
+  const { isFetching } = useGalleryImages().queryResult;
+  const { isNextEnabled, goNext, isPrevEnabled, goPrev } = useGalleryPagination();
 
-  const [shouldShowNextPrevButtons, setShouldShowNextPrevButtons] =
-    useState<boolean>(false);
+  const shouldShowLeftArrow = useMemo(() => {
+    if (!isOnFirstImageOfView) {
+      return true;
+    }
+    if (isPrevEnabled) {
+      return true;
+    }
+    return false;
+  }, [isOnFirstImageOfView, isPrevEnabled]);
 
-  const handleCurrentImagePreviewMouseOver = useCallback(() => {
-    setShouldShowNextPrevButtons(true);
-  }, []);
+  const onClickLeftArrow = useCallback(() => {
+    if (isOnFirstImageOfView) {
+      if (isPrevEnabled && !isFetching) {
+        goPrev('arrow');
+      }
+    } else {
+      prevImage();
+    }
+  }, [goPrev, isFetching, isOnFirstImageOfView, isPrevEnabled, prevImage]);
 
-  const handleCurrentImagePreviewMouseOut = useCallback(() => {
-    setShouldShowNextPrevButtons(false);
-  }, []);
+  const shouldShowRightArrow = useMemo(() => {
+    if (!isOnLastImageOfView) {
+      return true;
+    }
+    if (isNextEnabled) {
+      return true;
+    }
+    return false;
+  }, [isNextEnabled, isOnLastImageOfView]);
 
-  const handlePrevImage = useCallback(() => {
-    dispatch(imageSelected(prevImageId));
-  }, [dispatch, prevImageId]);
-
-  const handleNextImage = useCallback(() => {
-    dispatch(imageSelected(nextImageId));
-  }, [dispatch, nextImageId]);
-
-  useHotkeys(
-    'left',
-    () => {
-      handlePrevImage();
-    },
-    [prevImageId]
-  );
-
-  useHotkeys(
-    'right',
-    () => {
-      handleNextImage();
-    },
-    [nextImageId]
-  );
+  const onClickRightArrow = useCallback(() => {
+    if (isOnLastImageOfView) {
+      if (isNextEnabled && !isFetching) {
+        goNext('arrow');
+      }
+    } else {
+      nextImage();
+    }
+  }, [goNext, isFetching, isNextEnabled, isOnLastImageOfView, nextImage]);
 
   return (
-    <Flex
-      sx={{
-        justifyContent: 'space-between',
-        height: '100%',
-        width: '100%',
-        pointerEvents: 'none',
-      }}
-    >
-      <Grid
-        sx={{
-          ...nextPrevButtonTriggerAreaStyles,
-          justifyContent: 'flex-start',
-        }}
-        onMouseOver={handleCurrentImagePreviewMouseOver}
-        onMouseOut={handleCurrentImagePreviewMouseOut}
-      >
-        {shouldShowNextPrevButtons && !isOnFirstImage && (
-          <IconButton
-            aria-label={t('accessibility.previousImage')}
-            icon={<FaAngleLeft size={64} />}
-            variant="unstyled"
-            onClick={handlePrevImage}
-            boxSize={16}
-            sx={nextPrevButtonStyles}
-          />
-        )}
-      </Grid>
-      <Grid
-        sx={{
-          ...nextPrevButtonTriggerAreaStyles,
-          justifyContent: 'flex-end',
-        }}
-        onMouseOver={handleCurrentImagePreviewMouseOver}
-        onMouseOut={handleCurrentImagePreviewMouseOut}
-      >
-        {shouldShowNextPrevButtons && !isOnLastImage && (
-          <IconButton
-            aria-label={t('accessibility.nextImage')}
-            icon={<FaAngleRight size={64} />}
-            variant="unstyled"
-            onClick={handleNextImage}
-            boxSize={16}
-            sx={nextPrevButtonStyles}
-          />
-        )}
-      </Grid>
-    </Flex>
+    <Box pos="relative" h="full" w="full">
+      {shouldShowLeftArrow && (
+        <IconButton
+          position="absolute"
+          top="50%"
+          transform="translate(0, -50%)"
+          aria-label={t('accessibility.previousImage')}
+          icon={<PiCaretLeftBold size={64} />}
+          variant="unstyled"
+          onClick={onClickLeftArrow}
+          isDisabled={isFetching}
+          color="base.100"
+          pointerEvents="auto"
+          insetInlineStart={inset}
+        />
+      )}
+      {shouldShowRightArrow && (
+        <IconButton
+          position="absolute"
+          top="50%"
+          transform="translate(0, -50%)"
+          aria-label={t('accessibility.nextImage')}
+          icon={<PiCaretRightBold size={64} />}
+          variant="unstyled"
+          onClick={onClickRightArrow}
+          isDisabled={isFetching}
+          color="base.100"
+          pointerEvents="auto"
+          insetInlineEnd={inset}
+        />
+      )}
+    </Box>
   );
 };
 
-export default NextPrevImageButtons;
+export default memo(NextPrevImageButtons);
